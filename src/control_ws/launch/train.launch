@@ -1,0 +1,4 @@
+<launch>
+    <node name="rl_trainer" pkg="control_ws" type="train_agent.py" output="screen" />
+    <node name="global_path_publisher" pkg="control_ws" type="global_pathPub.py" output="screen" />
+</launch>
