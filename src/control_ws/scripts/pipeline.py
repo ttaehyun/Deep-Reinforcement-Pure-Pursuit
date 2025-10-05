@@ -308,6 +308,8 @@ class DrappEnv(gym.Env):
 
         # Pure Pursuit Controller
         self.ppControl = PurePursuit()
+        
+        self.curriculum_stage = 1
 
         self.is_imu_received = False
         self.is_gss_received = False
@@ -352,6 +354,34 @@ class DrappEnv(gym.Env):
 
         self.ppControl.publish_marker(self.odom_marker_pub, "map", msg.pose.pose.position, "odom", (1, 0, 0))
 
+    def set_reward_weights(self):
+        if self.curriculum_stage = 1:
+            rospy.loginfo("Curriculum Stage 1: Learning to stay on track")
+            self.w_cte = -1.5
+            self.w_heading = -0.5
+            self.w_progress = 10.0
+            self.w_vel_error = 0.0
+            self.w_vel = 0.0
+            self.w_steering = -0.5
+            self.w_target = 0.0
+        elif self.curriculum_stage == 2:
+            rospy.loginfo("Curriculum Stage 2: Learning speed control.")
+            self.w_cte = -1.0
+            self.w_heading = -1.0
+            self.w_progress = 18.0
+            self.w_vel_error = -0.5
+            self.w_vel = 0.5
+            self.w_steering = -0.5
+            self.w_target = 0.0
+        else: # Stage 3 or default
+            rospy.loginfo("Curriculum Stage 3: Advanced cornering.")
+            self.w_cte = -1.0
+            self.w_heading = -1.0
+            self.w_vel_error = -0.5
+            self.w_vel = 0.5
+            self.w_steering = -0.5
+            self.w_progress = 18
+            self.w_target = 10.0
     def reset_parameters(self):
         self.prev_action = np.array([0.0, 0.0])
         self.current_vel_ms = 0.0
@@ -517,7 +547,10 @@ class DrappEnv(gym.Env):
         # action[0] : LFD
         # action[1] : target speed
         lfd = action[0]
-        target_speed = action[1]
+        if self.curriculum_stage == 1:
+            target_speed = 4.0 # 1단계에서는 속도 고정
+        else:
+            target_speed = action[1] # 2, 3단계에서는 에이전트가 결정
         # rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
         self.ppControl.set_lookahead_distance(lfd)
         self.ppControl.set_target_speed(target_speed)
