@@ -285,7 +285,7 @@ class DrappEnv(gym.Env):
         # target speed             -> action[1]
         # -------------------------------------
 
-        LFD_MIN = 2.5; LFD_MAX = 10.0 # meters
+        LFD_MIN = 1.0; LFD_MAX = 5.0 # meters
         SPEED_MIN = 1.38; SPEED_MAX = 10.0 # m/s
         self.action_space = spaces.Box(low=np.array([LFD_MIN, SPEED_MIN]).astype(np.float32),
                                        high=np.array([LFD_MAX, SPEED_MAX]).astype(np.float32))
@@ -334,6 +334,7 @@ class DrappEnv(gym.Env):
 
         self.w_target = 10.0 # 코너 타겟팅 가중치
         # self.w_lfd = 2.0 # LFD 보상 가중치
+        self.set_reward_weights()
     def imu_cb(self, msg):
 
         self.angular_velocity_z = msg.angular_velocity.z
@@ -355,14 +356,14 @@ class DrappEnv(gym.Env):
         self.ppControl.publish_marker(self.odom_marker_pub, "map", msg.pose.pose.position, "odom", (1, 0, 0))
 
     def set_reward_weights(self):
-        if self.curriculum_stage = 1:
+        if self.curriculum_stage == 1:
             rospy.loginfo("Curriculum Stage 1: Learning to stay on track")
             self.w_cte = -1.5
             self.w_heading = -0.5
-            self.w_progress = 10.0
+            self.w_progress = 15.0
             self.w_vel_error = 0.0
             self.w_vel = 0.0
-            self.w_steering = -0.5
+            self.w_steering = -2.0
             self.w_target = 0.0
         elif self.curriculum_stage == 2:
             rospy.loginfo("Curriculum Stage 2: Learning speed control.")
@@ -548,7 +549,7 @@ class DrappEnv(gym.Env):
         # action[1] : target speed
         lfd = action[0]
         if self.curriculum_stage == 1:
-            target_speed = 4.0 # 1단계에서는 속도 고정
+            target_speed = 6.0 # 1단계에서는 속도 고정
         else:
             target_speed = action[1] # 2, 3단계에서는 에이전트가 결정
         # rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
