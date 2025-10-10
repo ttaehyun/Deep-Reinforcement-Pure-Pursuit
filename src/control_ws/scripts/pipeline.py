@@ -81,7 +81,8 @@ class PurePursuit:
 
         # 2. 오차(Error) 계산
         error = self.target_v_ms - current_v_ms
-
+        if (error * self.previous_error) < 0:
+            self.integral = 0.0
         # 3. P, I, D 각 항 계산
         # 비례(Proportional) 항
         p_term = error
@@ -103,16 +104,16 @@ class PurePursuit:
         # 오차가 양수(+)이면 목표 속도보다 느리므로 가속 필요
         if error > 0:
             # 목표 속도까지 도달하는데 0.4초 달성
-            kp = 0.1
-            ki = 0.08
-            kd = 0.01
+            kp = 0.05
+            ki = 0.02
+            kd = 0.0
         # 오차가 음수(-)이면 목표 속도보다 빠르므로 감속 필요
         else:
             # 목표 속도까지 도달하는데 0.5초 달성
-            kp = 0.2
-            ki = 0.1
-            kd = 0.01
-
+            kp = 0.1
+            ki = 0.02
+            kd = 0.0
+        # print("error: ", error)
         # 5. 최종 제어 출력 계산
         # P, I, D 항에 각각의 게인(Kp, Ki, Kd)을 곱하여 더함
         pid_output = (kp * p_term) + (ki * i_term) + (kd * d_term)
@@ -124,7 +125,7 @@ class PurePursuit:
         # 7. 제어 출력을 스로틀과 브레이크 값으로 변환
         throttle = 0.0
         brake = 0.0
-
+        
         if pid_output > 0: # 출력이 양수이면 스로틀 조작
             throttle = pid_output
         else: # 출력이 음수이면 브레이크 조작
@@ -133,7 +134,8 @@ class PurePursuit:
         # 스로틀과 브레이크 값을 0과 1 사이로 제한 (Clamping)
         throttle = max(0.0, min(1.0, throttle))
         brake = max(0.0, min(1.0, brake))
-
+        # print("current_v_ms: %.4f, target_v_ms: %.4f" % (current_v_ms, self.target_v_ms))
+        # print("PID Output: %.4f, Throttle: %.4f, Brake: %.4f" % (pid_output, throttle, brake))
         return throttle, brake
     def search_direction(self, nearest_idx, yaw):
         vehicle_heading_vector = (math.cos(yaw), math.sin(yaw))
@@ -358,31 +360,48 @@ class DrappEnv(gym.Env):
     def set_reward_weights(self):
         if self.curriculum_stage == 1:
             rospy.loginfo("Curriculum Stage 1: Learning to stay on track")
-            self.w_cte = -1.5
+            self.w_cte = -8.0
             self.w_heading = -0.5
-            self.w_progress = 15.0
+            self.w_progress = 10.0
             self.w_vel_error = 0.0
             self.w_vel = 0.0
             self.w_steering = -2.0
             self.w_target = 0.0
         elif self.curriculum_stage == 2:
             rospy.loginfo("Curriculum Stage 2: Learning speed control.")
-            self.w_cte = -1.0
-            self.w_heading = -1.0
-            self.w_progress = 18.0
-            self.w_vel_error = -0.5
-            self.w_vel = 0.5
-            self.w_steering = -0.5
+            # --- 보상 항목 ---
+            self.w_vel = 10.0       # ★★★ 속도 보상 대폭 상향 (기존 4.0 -> 10.0 이상)
+            self.w_progress = 18.0    # (유지)
+
+            # --- 페널티 항목 ---
+            self.w_cte = -0.5         # ★★★ CTE 페널티 완화 (실수할 기회를 줌)
+            self.w_steering = -0.2    # ★★★ 조향 페널티 완화
+            self.w_heading = -0.5     # (유지 또는 -0.2로 완화)
+            
+            # --- 비활성화 항목 ---
+            self.w_vel_error = 0.0  # (유지)
             self.w_target = 0.0
+        elif self.curriculum_stage == 2.5: # ★★★ 2.5단계 브릿지 추가 ★★★
+            rospy.loginfo("Curriculum Stage 2.5: Soft landing for cornering.")
+            # --- 보상 항목 ---
+            self.w_vel = 5.0          # 직선 속도 보상은 적당히 유지
+            self.w_progress = 18.0
+            self.w_target = 15.0      # 코너링 타겟 보상 활성화 (3단계보다 조금 낮게)
+
+            # --- 페널티 항목 ---
+            self.w_cte = -0.5         # 페널티는 전반적으로 완화
+            self.w_heading = -0.5
+            self.w_steering = -0.2
+            self.w_vel_error = 0.0   # ★★★ 속도 오차 페널티를 대폭 완화 (가장 중요!)
         else: # Stage 3 or default
             rospy.loginfo("Curriculum Stage 3: Advanced cornering.")
             self.w_cte = -1.0
             self.w_heading = -1.0
-            self.w_vel_error = -0.5
-            self.w_vel = 0.5
+            self.w_vel_error = -0.1
+            self.w_vel = 5.0
             self.w_steering = -0.5
             self.w_progress = 18
-            self.w_target = 10.0
+            self.w_target = 15.0
     def reset_parameters(self):
         self.prev_action = np.array([0.0, 0.0])
         self.current_vel_ms = 0.0
@@ -549,7 +568,7 @@ class DrappEnv(gym.Env):
         # action[1] : target speed
         lfd = action[0]
         if self.curriculum_stage == 1:
-            target_speed = 6.0 # 1단계에서는 속도 고정
+            target_speed = 5.0 # 1단계에서는 속도 고정
         else:
             target_speed = action[1] # 2, 3단계에서는 에이전트가 결정
         # rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
@@ -629,7 +648,7 @@ class DrappEnv(gym.Env):
 
         # 하이퍼파라미터 설정
         TRANSITION_CURVATURE = 0.12 # 튜닝 대상
-        TARGET_CORNER_SPEED = 5.0  # m/s
+        TARGET_CORNER_SPEED = 6.0  # m/s
 
         # 1. 코너링 가중치 계산
         cornering_weight = min(1.0, final_curvature_proxy / TRANSITION_CURVATURE)
@@ -660,7 +679,7 @@ class DrappEnv(gym.Env):
         vel_error = abs(target_speed - linear_vel_ms)
         reward_vel = self.w_vel_error * (vel_error**2)  # 속도 오차에 대한 페널티
 
-        reward_steering = self.w_steering * (angular_vel_z**2) * linear_vel_ms  # 급격한 조향에 대한 페널티
+        reward_steering = self.w_steering * (angular_vel_z**2) # linear_vel_ms   급격한 조향에 대한 페널티
         
 
         reward = reward_cte + reward_heading + reward_vel + reward_steering + reward_progress + blended_speed_reward
@@ -690,7 +709,7 @@ class DrappEnv(gym.Env):
         )
         # 종료 조건: CTE가 너무 크면 종료
         terminated = False
-        if abs(cte) > 1.4: # CTE가 1.4m 이상이면 종료 , path 경로를 완전 따라가도록 유도
+        if abs(cte) > 1.2: # CTE가 1.4m 이상이면 종료 , path 경로를 완전 따라가도록 유도
             terminated = True
             reward = -200.0  # 큰 페널티
             rospy.loginfo("Episode terminated due to large CTE: %.2f", cte)

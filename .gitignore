@@ -1,3 +1,9 @@
 build/
 devel/
 src/log/
+wandb/
+*.zip
+*.pkl
+models/
+Model/
+runs/
