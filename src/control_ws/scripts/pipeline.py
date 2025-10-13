@@ -320,6 +320,8 @@ class DrappEnv(gym.Env):
         self.path = Path()
         self.odom = Odometry()
         
+        self.curvature_proxy = 0.0
+
         self.prev_action = np.array([0.0, 0.0])
         self.current_vel_ms = 0.0
         self.angular_velocity_z = 0.0
@@ -372,7 +374,7 @@ class DrappEnv(gym.Env):
             # --- 보상 항목 ---
             self.w_vel = 3.0      
             self.w_progress = 10.0    
-            self.w_target = 20.0
+            self.w_target = 10.0
 
             # --- 페널티 항목 ---
             self.w_cte = -1.0         
@@ -570,7 +572,10 @@ class DrappEnv(gym.Env):
             lfd = action[0]
             target_speed = 6.0 # 1단계에서는 속도 고정
         elif self.curriculum_stage == 2:
-            lfd = min(max(0.4 * self.current_vel_ms - 1.0, 1.0), 3.0) # 2단계에서는 LFD 고정
+            # 곡률이 작아질수록 LFD 키우기 (hysteresis 느낌)
+            base = max(0.4*self.current_vel_ms - 1.0, 1.0)
+            gain = 2.0/(0.1 + self.curvature_proxy)       # 곡률↓ → gain↑
+            lfd = np.clip(base + gain, 1.5, 5.0)     # 상한 5.0으로 확대
             target_speed = action[1]
         else:
             lfd = action[0]
@@ -648,15 +653,15 @@ class DrappEnv(gym.Env):
 
         # 모든 y좌표의 절대값 평균을 내어 곡률 지표로 사용합니다.
         # 경로가 직선에 가까우면 y값들이 0에 가까워지고, 휠수록 y값들이 커집니다.
-        final_curvature_proxy = np.mean(np.abs(future_waypoints_y))
+        self.curvature_proxy = np.mean(np.abs(future_waypoints_y))
         
-        rospy.loginfo_throttle(0.05,"Curvature Proxy (New): %.4f" % (final_curvature_proxy))
+        rospy.loginfo_throttle(0.05,"Curvature Proxy (New): %.4f" % (self.curvature_proxy))
         # -------------------------사용안함 -------------------------
         # 2. 새로운 보상 항 계산
         #    곡률이 클 때 속도가 높을수록 큰 페널티를 부여
         # (예: 스케일링 후 제곱)
         # CURVATURE_SCALE = 3.5
-        # scaled_curvature = CURVATURE_SCALE * final_curvature_proxy
+        # scaled_curvature = CURVATURE_SCALE * self.curvature_proxy
         # reward_curvature_speed = self.w_curvature_speed * (scaled_curvature**2) * linear_vel_ms
         # -------------------------사용안함 -------------------------
 
@@ -666,15 +671,24 @@ class DrappEnv(gym.Env):
         TARGET_CORNER_SPEED = 7.0  # m/s
 
         # 1. 코너링 가중치 계산
-        cornering_weight = min(1.0, final_curvature_proxy / TRANSITION_CURVATURE)
+        cornering_weight = min(1.0, self.curvature_proxy / TRANSITION_CURVATURE)
 
         # 2. 각 상황에 대한 보상 값 계산
         # 2-1. 직선 보상 (w_vel, 예: 1.0)
         reward_straight = self.w_vel * linear_vel_ms
 
-        # 2-2. 코너 타겟팅 보상 (w_target, 예: 20.0)
-        speed_diff = max(linear_vel_ms, 6.0) - TARGET_CORNER_SPEED
-        reward_corner_target = (-0.1* (speed_diff**2) + 0.1) * self.w_target
+        # 곡률 기반 목표속도 v*(kappa)
+        k0, k1 = 9.5, 6.0          # 직선/코너 기준 속도(튜닝)
+        curvature = self.curvature_proxy
+        v_target = np.clip(k0 - k1*curvature, 4.0, 10.0)
+
+        # 속도 추종 보상 (정사각 벌점)
+        reward_corner_target = -0.4 * (linear_vel_ms - v_target)**2 + 0.0
+        # cornering_weight로 블렌딩 유지
+
+        # # 2-2. 코너 타겟팅 보상 (w_target, 예: 20.0)
+        # speed_diff = max(linear_vel_ms, 6.0) - TARGET_CORNER_SPEED
+        # reward_corner_target = (-0.1* (speed_diff**2) + 0.1) * self.w_target
         # if reward_corner_target > 0:
         #     reward_corner_target = 4 * reward_corner_target
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
@@ -711,9 +725,7 @@ class DrappEnv(gym.Env):
             'raw/linear_velocity': linear_vel_ms,
             'raw/cte': cte,
             'raw/heading_error': heading_error,
-            'raw/immediate_curvature_proxy': immediate_curvature_proxy,
-            'raw/future_curvature_proxy': future_curvature_proxy,
-            'raw/final_curvature_proxy': final_curvature_proxy,
+            'raw/self.curvature_proxy': self.curvature_proxy,
             'action/lfd': lfd,
             'action/target_speed': target_speed,
         })
