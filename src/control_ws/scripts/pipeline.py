@@ -574,8 +574,8 @@ class DrappEnv(gym.Env):
         elif self.curriculum_stage == 2:
             # 곡률이 작아질수록 LFD 키우기 (hysteresis 느낌)
             base = max(0.4*self.current_vel_ms - 1.0, 1.0)
-            gain = 2.0/(0.1 + self.curvature_proxy)       # 곡률↓ → gain↑
-            lfd = np.clip(base + gain, 1.5, 5.0)     # 상한 5.0으로 확대
+            gain = 0.5/(0.1 + self.curvature_proxy)       # 곡률↓ → gain↑
+            lfd = np.clip(base + gain, 1.0, 3.0)     # 상한 3.0으로 확대
             target_speed = action[1]
         else:
             lfd = action[0]
