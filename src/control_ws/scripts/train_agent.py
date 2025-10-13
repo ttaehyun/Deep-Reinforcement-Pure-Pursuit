@@ -132,7 +132,7 @@ def main():
             # 5. 모델 추가 훈련을 시작합니다.
             rospy.loginfo("Resuming model training...")
             model.learn(
-                total_timesteps=500000,     # ★ 추가로 훈련할 스텝 수
+                total_timesteps=1000000,     # ★ 추가로 훈련할 스텝 수
                 reset_num_timesteps=False,  # ★ 이전 타임스텝에서 이어서 카운트
                 log_interval=1,
                 callback=callback_list

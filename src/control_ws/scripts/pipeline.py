@@ -372,7 +372,7 @@ class DrappEnv(gym.Env):
         elif self.curriculum_stage == 2:
             rospy.loginfo("Curriculum Stage 2: Learning speed control.")
             # --- 보상 항목 ---
-            self.w_vel = 3.0      
+            self.w_vel = 0.3      
             self.w_progress = 10.0    
             self.w_target = 10.0
 
@@ -386,7 +386,7 @@ class DrappEnv(gym.Env):
         elif self.curriculum_stage == 2.5: # ★★★ 2.5단계 브릿지 추가 ★★★
             rospy.loginfo("Curriculum Stage 2.5: Soft landing for cornering.")
             # --- 보상 항목 ---
-            self.w_vel = 3.0          # 직선 속도 보상은 적당히 유지
+            self.w_vel = 0.5          # 직선 속도 보상은 적당히 유지
             self.w_progress = 10.0
             self.w_target = 10.0      # 코너링 타겟 보상 활성화 (3단계보다 조금 낮게)
 
@@ -678,12 +678,12 @@ class DrappEnv(gym.Env):
         reward_straight = self.w_vel * linear_vel_ms
 
         # 곡률 기반 목표속도 v*(kappa)
-        k0, k1 = 9.5, 6.0          # 직선/코너 기준 속도(튜닝)
+        k0, k1 = 9.5, 4.0          # 직선/코너 기준 속도(튜닝)
         curvature = self.curvature_proxy
         v_target = np.clip(k0 - k1*curvature, 4.0, 10.0)
 
         # 속도 추종 보상 (정사각 벌점)
-        reward_corner_target = -0.4 * (linear_vel_ms - v_target)**2 + 0.0
+        reward_corner_target = -0.2 * (linear_vel_ms - v_target)**2 + 0.0
         # cornering_weight로 블렌딩 유지
 
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
