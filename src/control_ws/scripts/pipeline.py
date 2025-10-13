@@ -686,11 +686,6 @@ class DrappEnv(gym.Env):
         reward_corner_target = -0.4 * (linear_vel_ms - v_target)**2 + 0.0
         # cornering_weight로 블렌딩 유지
 
-        # # 2-2. 코너 타겟팅 보상 (w_target, 예: 20.0)
-        # speed_diff = max(linear_vel_ms, 6.0) - TARGET_CORNER_SPEED
-        # reward_corner_target = (-0.1* (speed_diff**2) + 0.1) * self.w_target
-        # if reward_corner_target > 0:
-        #     reward_corner_target = 4 * reward_corner_target
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
         blended_speed_reward = ((1 - cornering_weight) * reward_straight) + (cornering_weight * reward_corner_target)
         rospy.loginfo_throttle(0.05, "Cornering Weight: %.4f, Reward Straight: %.2f, Reward Corner Target: %.2f, Blended: %.2f" % (cornering_weight, reward_straight, reward_corner_target, blended_speed_reward))
