@@ -311,7 +311,7 @@ class DrappEnv(gym.Env):
         # Pure Pursuit Controller
         self.ppControl = PurePursuit()
         
-        self.curriculum_stage = 1
+        self.curriculum_stage = 2
 
         self.is_imu_received = False
         self.is_gss_received = False
@@ -365,34 +365,34 @@ class DrappEnv(gym.Env):
             self.w_progress = 10.0
             self.w_vel_error = 0.0
             self.w_vel = 0.0
-            self.w_steering = -2.0
+            self.w_steering = -4.0
             self.w_target = 0.0
         elif self.curriculum_stage == 2:
             rospy.loginfo("Curriculum Stage 2: Learning speed control.")
             # --- 보상 항목 ---
-            self.w_vel = 10.0       # ★★★ 속도 보상 대폭 상향 (기존 4.0 -> 10.0 이상)
-            self.w_progress = 18.0    # (유지)
+            self.w_vel = 3.0      
+            self.w_progress = 10.0    
+            self.w_target = 20.0
 
             # --- 페널티 항목 ---
-            self.w_cte = -0.5         # ★★★ CTE 페널티 완화 (실수할 기회를 줌)
-            self.w_steering = -0.2    # ★★★ 조향 페널티 완화
-            self.w_heading = -0.5     # (유지 또는 -0.2로 완화)
+            self.w_cte = -1.0         
+            self.w_steering = -0.5   
+            self.w_heading = -1.0
             
             # --- 비활성화 항목 ---
-            self.w_vel_error = 0.0  # (유지)
-            self.w_target = 0.0
+            self.w_vel_error = -0.0 # 급한 가속 감속 페널티
         elif self.curriculum_stage == 2.5: # ★★★ 2.5단계 브릿지 추가 ★★★
             rospy.loginfo("Curriculum Stage 2.5: Soft landing for cornering.")
             # --- 보상 항목 ---
-            self.w_vel = 5.0          # 직선 속도 보상은 적당히 유지
-            self.w_progress = 18.0
-            self.w_target = 15.0      # 코너링 타겟 보상 활성화 (3단계보다 조금 낮게)
+            self.w_vel = 3.0          # 직선 속도 보상은 적당히 유지
+            self.w_progress = 10.0
+            self.w_target = 10.0      # 코너링 타겟 보상 활성화 (3단계보다 조금 낮게)
 
             # --- 페널티 항목 ---
-            self.w_cte = -0.5         # 페널티는 전반적으로 완화
-            self.w_heading = -0.5
-            self.w_steering = -0.2
-            self.w_vel_error = 0.0   # ★★★ 속도 오차 페널티를 대폭 완화 (가장 중요!)
+            self.w_cte = -1.0         # 페널티는 전반적으로 완화
+            self.w_heading = -1.0
+            self.w_steering = -0.5
+            self.w_vel_error = -0.1   # ★★★ 속도 오차 페널티를 대폭 완화 (가장 중요!)
         else: # Stage 3 or default
             rospy.loginfo("Curriculum Stage 3: Advanced cornering.")
             self.w_cte = -1.0
@@ -566,12 +566,16 @@ class DrappEnv(gym.Env):
     def step(self, action):
         # action[0] : LFD
         # action[1] : target speed
-        lfd = action[0]
         if self.curriculum_stage == 1:
-            target_speed = 5.0 # 1단계에서는 속도 고정
+            lfd = action[0]
+            target_speed = 6.0 # 1단계에서는 속도 고정
+        elif self.curriculum_stage == 2:
+            lfd = min(max(0.4 * self.current_vel_ms - 1.0, 1.0), 3.0) # 2단계에서는 LFD 고정
+            target_speed = action[1]
         else:
+            lfd = action[0]
             target_speed = action[1] # 2, 3단계에서는 에이전트가 결정
-        # rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
+        rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
         self.ppControl.set_lookahead_distance(lfd)
         self.ppControl.set_target_speed(target_speed)
         self.ppControl.set_path_data(self.path)
@@ -617,26 +621,36 @@ class DrappEnv(gym.Env):
         # 1. 미래 경로점을 이용한 곡률 대리 지표 계산
         #    observation에서 상대 좌표계의 미래 경로점을 가져옵니다.
         #    obs[4]부터 10개의 값이 (x, y) 10쌍입니다.
-        future_waypoints = observation[4:24].reshape((10, 2))
+        # future_waypoints = observation[4:24].reshape((10, 2))
 
-        # 간단한 곡률 계산: 3개의 점(차량 위치, 중간점, 끝점)이 만드는 삼각형의 넓이를 이용
-        # 점들이 일직선에 가까울수록(곡률 낮음) 넓이는 0에 가깝고, 꺾일수록(곡률 높음) 넓이가 커집니다.
-        # P0 = (0,0), P1 = 중간점, P2 = 끝점
-        # --- 단기 곡률 계산 (가까운 미래) ---
-        p1_short_x, p1_short_y = future_waypoints[2] 
-        p2_short_x, p2_short_y = future_waypoints[4]
-        immediate_curvature_proxy = abs(p1_short_x * p2_short_y - p2_short_x * p1_short_y)
+        # # 간단한 곡률 계산: 3개의 점(차량 위치, 중간점, 끝점)이 만드는 삼각형의 넓이를 이용
+        # # 점들이 일직선에 가까울수록(곡률 낮음) 넓이는 0에 가깝고, 꺾일수록(곡률 높음) 넓이가 커집니다.
+        # # P0 = (0,0), P1 = 중간점, P2 = 끝점
+        # # --- 단기 곡률 계산 (가까운 미래) ---
+        # p1_short_x, p1_short_y = future_waypoints[2] 
+        # p2_short_x, p2_short_y = future_waypoints[4]
+        # immediate_curvature_proxy = abs(p1_short_x * p2_short_y - p2_short_x * p1_short_y)
 
-        # --- 장기 곡률 계산 (먼 미래) ---
-        p1_long_x, p1_long_y = future_waypoints[7]
-        p2_long_x, p2_long_y = future_waypoints[9]
-        # 삼각형 넓이 공식의 2배 = |x1*y2 - x2*y1| (벡터 외적의 크기)
-        future_curvature_proxy = abs(p1_long_x * p2_long_y - p2_long_x * p1_long_y)
+        # # --- 장기 곡률 계산 (먼 미래) ---
+        # p1_long_x, p1_long_y = future_waypoints[7]
+        # p2_long_x, p2_long_y = future_waypoints[9]
+        # # 삼각형 넓이 공식의 2배 = |x1*y2 - x2*y1| (벡터 외적의 크기)
+        # future_curvature_proxy = abs(p1_long_x * p2_long_y - p2_long_x * p1_long_y)
 
-        # --- 최종 곡률 결정 ---
-        # 두 곡률 중 더 큰 값(더 위험한 상황)을 최종 곡률로 선택
-        final_curvature_proxy = max(immediate_curvature_proxy, future_curvature_proxy)
+        # # --- 최종 곡률 결정 ---
+        # # 두 곡률 중 더 큰 값(더 위험한 상황)을 최종 곡률로 선택
+        # final_curvature_proxy = max(immediate_curvature_proxy, future_curvature_proxy)
         # rospy.loginfo_throttle(0.05,"Immediate Curvature Proxy: %.4f, Future Curvature Proxy: %.4f, Final: %.4f" % (immediate_curvature_proxy, future_curvature_proxy, final_curvature_proxy))
+        # --- (수정) 안정적인 곡률 계산 로직 ---
+        # 10개의 미래 경로점 (x, y) 좌표들을 가져옵니다.
+        # obs[4]부터 obs[23]까지가 경로점 데이터입니다.
+        future_waypoints_y = observation[5:24:2]  # y 좌표들만 추출 (상대 좌표계이므로 y가 측면 편차)
+
+        # 모든 y좌표의 절대값 평균을 내어 곡률 지표로 사용합니다.
+        # 경로가 직선에 가까우면 y값들이 0에 가까워지고, 휠수록 y값들이 커집니다.
+        final_curvature_proxy = np.mean(np.abs(future_waypoints_y))
+        
+        rospy.loginfo_throttle(0.05,"Curvature Proxy (New): %.4f" % (final_curvature_proxy))
         # -------------------------사용안함 -------------------------
         # 2. 새로운 보상 항 계산
         #    곡률이 클 때 속도가 높을수록 큰 페널티를 부여
@@ -647,8 +661,9 @@ class DrappEnv(gym.Env):
         # -------------------------사용안함 -------------------------
 
         # 하이퍼파라미터 설정
-        TRANSITION_CURVATURE = 0.12 # 튜닝 대상
-        TARGET_CORNER_SPEED = 6.0  # m/s
+        TRANSITION_CURVATURE = 0.4 # ★★★ 새로운 곡률 지표에 맞게 기준점 상향 조정 (튜닝 필요)
+        # TRANSITION_CURVATURE = 0.070 # 튜닝 대상
+        TARGET_CORNER_SPEED = 7.0  # m/s
 
         # 1. 코너링 가중치 계산
         cornering_weight = min(1.0, final_curvature_proxy / TRANSITION_CURVATURE)
@@ -658,13 +673,13 @@ class DrappEnv(gym.Env):
         reward_straight = self.w_vel * linear_vel_ms
 
         # 2-2. 코너 타겟팅 보상 (w_target, 예: 20.0)
-        speed_diff = linear_vel_ms - TARGET_CORNER_SPEED
+        speed_diff = max(linear_vel_ms, 6.0) - TARGET_CORNER_SPEED
         reward_corner_target = (-0.1* (speed_diff**2) + 0.1) * self.w_target
-        if reward_corner_target > 0:
-            reward_corner_target = 5 * reward_corner_target
+        # if reward_corner_target > 0:
+        #     reward_corner_target = 4 * reward_corner_target
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
         blended_speed_reward = ((1 - cornering_weight) * reward_straight) + (cornering_weight * reward_corner_target)
-
+        rospy.loginfo_throttle(0.05, "Cornering Weight: %.4f, Reward Straight: %.2f, Reward Corner Target: %.2f, Blended: %.2f" % (cornering_weight, reward_straight, reward_corner_target, blended_speed_reward))
         # lfd_gain_k= 1.8
         # min_lfd = 2.0
         # optimal_lfd = min(lfd_gain_k * linear_vel_ms + min_lfd, 10.0)
@@ -705,11 +720,11 @@ class DrappEnv(gym.Env):
         # ★★★★★ 각 보상 항목을 로그로 출력하여 스케일 확인 ★★★★★
         rospy.loginfo_throttle(0.05, 
             f"Rewards -> CTE: {reward_cte:.2f}, Heading: {reward_heading:.2f}, Vel: {reward_vel:.2f}, "
-            f"Steering: {reward_steering:.2f}, Progress: {reward_progress:.2f}, blended_speed_reward: {blended_speed_reward:.2f},  Total: {reward:.2f}"
+            f"Steering: {reward_steering:.2f}, Progress: {reward_progress:.2f},  blended_speed_reward: {blended_speed_reward:.2f},  Total: {reward:.2f}"
         )
         # 종료 조건: CTE가 너무 크면 종료
         terminated = False
-        if abs(cte) > 1.2: # CTE가 1.4m 이상이면 종료 , path 경로를 완전 따라가도록 유도
+        if abs(cte) > 1.4: # CTE가 1.4m 이상이면 종료 , path 경로를 완전 따라가도록 유도
             terminated = True
             reward = -200.0  # 큰 페널티
             rospy.loginfo("Episode terminated due to large CTE: %.2f", cte)
