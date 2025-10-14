@@ -311,7 +311,7 @@ class DrappEnv(gym.Env):
         # Pure Pursuit Controller
         self.ppControl = PurePursuit()
         
-        self.curriculum_stage = 2
+        self.curriculum_stage = 3
 
         self.is_imu_received = False
         self.is_gss_received = False
@@ -337,7 +337,14 @@ class DrappEnv(gym.Env):
         self.w_progress = 18  # 진행 보상에 대한 가중치
 
         self.w_target = 10.0 # 코너 타겟팅 가중치
-        # self.w_lfd = 2.0 # LFD 보상 가중치
+
+        self.lfd_prev = 3.0
+        self.v_prev   = 7.0
+        self.beta = 0.7   # LFD 스무딩
+        self.gamma = 0.4  # 속도 스무딩
+        self.lfd_min, self.lfd_max = 1.0, 5.0
+        self.v_min,   self.v_max   = 4.0, 10.0
+
         self.set_reward_weights()
     def imu_cb(self, msg):
 
@@ -383,27 +390,16 @@ class DrappEnv(gym.Env):
             
             # --- 비활성화 항목 ---
             self.w_vel_error = -0.0 # 급한 가속 감속 페널티
-        elif self.curriculum_stage == 2.5: # ★★★ 2.5단계 브릿지 추가 ★★★
-            rospy.loginfo("Curriculum Stage 2.5: Soft landing for cornering.")
-            # --- 보상 항목 ---
-            self.w_vel = 0.5          # 직선 속도 보상은 적당히 유지
-            self.w_progress = 10.0
-            self.w_target = 10.0      # 코너링 타겟 보상 활성화 (3단계보다 조금 낮게)
 
-            # --- 페널티 항목 ---
-            self.w_cte = -1.0         # 페널티는 전반적으로 완화
-            self.w_heading = -1.0
-            self.w_steering = -0.5
-            self.w_vel_error = -0.1   # ★★★ 속도 오차 페널티를 대폭 완화 (가장 중요!)
         else: # Stage 3 or default
             rospy.loginfo("Curriculum Stage 3: Advanced cornering.")
             self.w_cte = -1.0
             self.w_heading = -1.0
             self.w_vel_error = -0.1
-            self.w_vel = 5.0
+            self.w_vel = 0.3
             self.w_steering = -0.5
-            self.w_progress = 18
-            self.w_target = 15.0
+            self.w_progress = 10.0
+            self.w_target = 10.0
     def reset_parameters(self):
         self.prev_action = np.array([0.0, 0.0])
         self.current_vel_ms = 0.0
@@ -578,8 +574,14 @@ class DrappEnv(gym.Env):
             lfd = np.clip(base + gain, 1.0, 3.0)     # 상한 3.0으로 확대
             target_speed = action[1]
         else:
-            lfd = action[0]
-            target_speed = action[1] # 2, 3단계에서는 에이전트가 결정
+            lfd_raw = action[0]
+            v_raw = action[1] # 2, 3단계에서는 에이전트가 결정
+            # 안전 레이어(클램프 + 스무딩)
+            lfd = np.clip(self.beta  * self.lfd_prev + (1-self.beta)  * lfd_raw, self.lfd_min, self.lfd_max)
+            target_speed = np.clip(self.gamma * self.v_prev   + (1-self.gamma) * v_raw,   self.v_min,   self.v_max)
+
+            self.lfd_prev = lfd
+            self.v_prev   = target_speed
         rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
         self.ppControl.set_lookahead_distance(lfd)
         self.ppControl.set_target_speed(target_speed)
@@ -623,32 +625,6 @@ class DrappEnv(gym.Env):
         linear_vel_ms = observation[2] 
         angular_vel_z = observation[3]
 
-        # 1. 미래 경로점을 이용한 곡률 대리 지표 계산
-        #    observation에서 상대 좌표계의 미래 경로점을 가져옵니다.
-        #    obs[4]부터 10개의 값이 (x, y) 10쌍입니다.
-        # future_waypoints = observation[4:24].reshape((10, 2))
-
-        # # 간단한 곡률 계산: 3개의 점(차량 위치, 중간점, 끝점)이 만드는 삼각형의 넓이를 이용
-        # # 점들이 일직선에 가까울수록(곡률 낮음) 넓이는 0에 가깝고, 꺾일수록(곡률 높음) 넓이가 커집니다.
-        # # P0 = (0,0), P1 = 중간점, P2 = 끝점
-        # # --- 단기 곡률 계산 (가까운 미래) ---
-        # p1_short_x, p1_short_y = future_waypoints[2] 
-        # p2_short_x, p2_short_y = future_waypoints[4]
-        # immediate_curvature_proxy = abs(p1_short_x * p2_short_y - p2_short_x * p1_short_y)
-
-        # # --- 장기 곡률 계산 (먼 미래) ---
-        # p1_long_x, p1_long_y = future_waypoints[7]
-        # p2_long_x, p2_long_y = future_waypoints[9]
-        # # 삼각형 넓이 공식의 2배 = |x1*y2 - x2*y1| (벡터 외적의 크기)
-        # future_curvature_proxy = abs(p1_long_x * p2_long_y - p2_long_x * p1_long_y)
-
-        # # --- 최종 곡률 결정 ---
-        # # 두 곡률 중 더 큰 값(더 위험한 상황)을 최종 곡률로 선택
-        # final_curvature_proxy = max(immediate_curvature_proxy, future_curvature_proxy)
-        # rospy.loginfo_throttle(0.05,"Immediate Curvature Proxy: %.4f, Future Curvature Proxy: %.4f, Final: %.4f" % (immediate_curvature_proxy, future_curvature_proxy, final_curvature_proxy))
-        # --- (수정) 안정적인 곡률 계산 로직 ---
-        # 10개의 미래 경로점 (x, y) 좌표들을 가져옵니다.
-        # obs[4]부터 obs[23]까지가 경로점 데이터입니다.
         future_waypoints_y = observation[5:24:2]  # y 좌표들만 추출 (상대 좌표계이므로 y가 측면 편차)
 
         # 모든 y좌표의 절대값 평균을 내어 곡률 지표로 사용합니다.
@@ -656,14 +632,7 @@ class DrappEnv(gym.Env):
         self.curvature_proxy = np.mean(np.abs(future_waypoints_y))
         
         rospy.loginfo_throttle(0.05,"Curvature Proxy (New): %.4f" % (self.curvature_proxy))
-        # -------------------------사용안함 -------------------------
-        # 2. 새로운 보상 항 계산
-        #    곡률이 클 때 속도가 높을수록 큰 페널티를 부여
-        # (예: 스케일링 후 제곱)
-        # CURVATURE_SCALE = 3.5
-        # scaled_curvature = CURVATURE_SCALE * self.curvature_proxy
-        # reward_curvature_speed = self.w_curvature_speed * (scaled_curvature**2) * linear_vel_ms
-        # -------------------------사용안함 -------------------------
+
 
         # 하이퍼파라미터 설정
         TRANSITION_CURVATURE = 0.4 # ★★★ 새로운 곡률 지표에 맞게 기준점 상향 조정 (튜닝 필요)
@@ -689,11 +658,11 @@ class DrappEnv(gym.Env):
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
         blended_speed_reward = ((1 - cornering_weight) * reward_straight) + (cornering_weight * reward_corner_target)
         rospy.loginfo_throttle(0.05, "Cornering Weight: %.4f, Reward Straight: %.2f, Reward Corner Target: %.2f, Blended: %.2f" % (cornering_weight, reward_straight, reward_corner_target, blended_speed_reward))
-        # lfd_gain_k= 1.8
-        # min_lfd = 2.0
-        # optimal_lfd = min(lfd_gain_k * linear_vel_ms + min_lfd, 10.0)
-        # lfd_error = lfd - optimal_lfd
-        # reward_lfd = self.w_lfd * (-1.0 *(lfd_error**2) + 1.0)
+        
+        # 액션 변화율 벌점(너무 덜컥거리면)
+        reward_error = 0.2 * ( (lfd - self.lfd_prev)**2 + (target_speed - self.v_prev)**2 )
+        # 코너에서 LFD 과대 억제(언더스티어 방지)
+        reward_lfd = 0.1 * (lfd * self.curvature_proxy)**2
 
         # 보상 함수 설계
         reward_cte = self.w_cte * (cte ** 2)  # CTE에 대한 페널티
@@ -706,16 +675,17 @@ class DrappEnv(gym.Env):
         reward_steering = self.w_steering * (angular_vel_z**2) # linear_vel_ms   급격한 조향에 대한 페널티
         
 
-        reward = reward_cte + reward_heading + reward_vel + reward_steering + reward_progress + blended_speed_reward
+        reward = reward_cte + reward_heading + reward_error + reward_steering + reward_progress + blended_speed_reward + reward_lfd
         wandb.log({
             'custom/reward_cte': reward_cte,
             'custom/reward_heading': reward_heading,
-            'custom/reward_vel_error': reward_vel,
+            'custom/reward_error': reward_error,
             'custom/reward_steering': reward_steering,
             'custom/reward_progress': reward_progress,
             'custom/reward_corner_target': reward_corner_target,
             'custom/reward_straight_speed': reward_straight,
             'custom/blended_speed_reward': blended_speed_reward,
+            'custom/reward_lfd': reward_lfd,
             'custom/total_reward': reward,
             'raw/linear_velocity': linear_vel_ms,
             'raw/cte': cte,
