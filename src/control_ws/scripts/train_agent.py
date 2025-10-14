@@ -69,15 +69,15 @@ def main():
     # 이 코드는 학습 시작 전에 W&B 서버에 새로운 실험을 등록합니다.
     run = wandb.init(
         project="DRAPP_TD3",  # W&B 프로젝트 이름 (자유롭게 설정)
-        name="competition_map2_v10_max_corner", # 이번 실험의 이름 (자유롭게 설정)
+        name="competition_map2_v12_test", # 이번 실험의 이름 (자유롭게 설정)
         sync_tensorboard=True,      # SB3의 TensorBoard 로그를 W&B로 자동 동기화
         monitor_gym=True,           # 환경의 통계(보상 등)를 자동으로 기록
         save_code=True,             # 실행 코드를 W&B에 저장하여 재현성 확보
     )
     if relearning:
         # --- 불러올 모델과 환경 파일 경로 ---
-        MODEL_PATH = "competition_map2_v9.zip"
-        ENV_STATS_PATH = "competition_map2_v9.pkl"
+        MODEL_PATH = "competition_map2_v10.zip"
+        ENV_STATS_PATH = "competition_map2_v10.pkl"
         if not os.path.exists(MODEL_PATH) or not os.path.exists(ENV_STATS_PATH):
             rospy.logerr("Model or environment stats file not found!")
             return
@@ -102,7 +102,7 @@ def main():
         # 2. 액션 노이즈(Action Noise)를 설정합니다.
         # 에이전트의 탐험(Exploration)을 돕기 위해 행동에 약간의 무작위성을 부여합니다.
         n_actions = env.action_space.shape[-1]
-        action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.25 * np.ones(n_actions))
+        action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.15 * np.ones(n_actions))
         
         # 3. 안전 종료 콜백 객체를 생성합니다.
         shutdown_callback = RosShutdownCallback()
@@ -161,8 +161,8 @@ def main():
 
         # 6. 훈련이 정상적으로 끝나거나 Ctrl+C로 중단되면, 최종 모델을 저장합니다.
         rospy.loginfo("Training finished or stopped. Saving final model...")
-        model.save("competition_map2_v10.zip")
-        env.save("competition_map2_v10.pkl")  # VecNormalize 객체도 저장
+        model.save("competition_map2_v12_test.zip")
+        env.save("competition_map2_v12_test.pkl")  # VecNormalize 객체도 저장
 
     except rospy.ROSInterruptException:
         # Ctrl+C가 눌리면 rospy.ROSInterruptException이 발생하지만,

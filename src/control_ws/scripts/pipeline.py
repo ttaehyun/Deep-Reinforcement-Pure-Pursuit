@@ -338,11 +338,11 @@ class DrappEnv(gym.Env):
 
         self.w_target = 10.0 # 코너 타겟팅 가중치
 
-        self.lfd_prev = 3.0
+        self.lfd_prev = 2.0
         self.v_prev   = 7.0
-        self.beta = 0.7   # LFD 스무딩
-        self.gamma = 0.4  # 속도 스무딩
-        self.lfd_min, self.lfd_max = 1.0, 5.0
+        self.beta = 0.7  # LFD 스무딩
+        self.gamma = 0.5  # 속도 스무딩
+        self.lfd_min, self.lfd_max = 1.0, 3.0
         self.v_min,   self.v_max   = 4.0, 10.0
 
         self.set_reward_weights()
@@ -395,7 +395,7 @@ class DrappEnv(gym.Env):
             rospy.loginfo("Curriculum Stage 3: Advanced cornering.")
             self.w_cte = -1.0
             self.w_heading = -1.0
-            self.w_vel_error = -0.1
+            # self.w_vel_error = -0.1
             self.w_vel = 0.3
             self.w_steering = -0.5
             self.w_progress = 10.0
@@ -577,11 +577,12 @@ class DrappEnv(gym.Env):
             lfd_raw = action[0]
             v_raw = action[1] # 2, 3단계에서는 에이전트가 결정
             # 안전 레이어(클램프 + 스무딩)
-            lfd = np.clip(self.beta  * self.lfd_prev + (1-self.beta)  * lfd_raw, self.lfd_min, self.lfd_max)
+            lfd_max_dynamic = 3.0 - 1.5 * min(self.curvature_proxy, 1.0)
+            lfd_max_dynamic = np.clip(lfd_max_dynamic, 1.2, 3.0)
+            lfd = np.clip(self.beta*self.lfd_prev + (1-self.beta)*lfd_raw,self.lfd_min, lfd_max_dynamic)
+
             target_speed = np.clip(self.gamma * self.v_prev   + (1-self.gamma) * v_raw,   self.v_min,   self.v_max)
 
-            self.lfd_prev = lfd
-            self.v_prev   = target_speed
         rospy.loginfo_throttle(0.05, "LFD: %.2f, Target Speed: %.2f" % (lfd, target_speed))
         self.ppControl.set_lookahead_distance(lfd)
         self.ppControl.set_target_speed(target_speed)
@@ -647,12 +648,12 @@ class DrappEnv(gym.Env):
         reward_straight = self.w_vel * linear_vel_ms
 
         # 곡률 기반 목표속도 v*(kappa)
-        k0, k1 = 9.5, 4.0          # 직선/코너 기준 속도(튜닝)
+        k0, k1 = 9.0, 5.0          # 직선/코너 기준 속도(튜닝)
         curvature = self.curvature_proxy
         v_target = np.clip(k0 - k1*curvature, 4.0, 10.0)
 
         # 속도 추종 보상 (정사각 벌점)
-        reward_corner_target = -0.2 * (linear_vel_ms - v_target)**2 + 0.0
+        reward_corner_target = -0.3 * (linear_vel_ms - v_target)**2 + 0.0
         # cornering_weight로 블렌딩 유지
 
         # 3. 가중치를 이용해 두 보상을 부드럽게 결합
@@ -660,17 +661,19 @@ class DrappEnv(gym.Env):
         rospy.loginfo_throttle(0.05, "Cornering Weight: %.4f, Reward Straight: %.2f, Reward Corner Target: %.2f, Blended: %.2f" % (cornering_weight, reward_straight, reward_corner_target, blended_speed_reward))
         
         # 액션 변화율 벌점(너무 덜컥거리면)
-        reward_error = 0.2 * ( (lfd - self.lfd_prev)**2 + (target_speed - self.v_prev)**2 )
+        reward_error = -0.2 * ( (lfd - self.lfd_prev)**2 + (target_speed - self.v_prev)**2 )
         # 코너에서 LFD 과대 억제(언더스티어 방지)
-        reward_lfd = 0.1 * (lfd * self.curvature_proxy)**2
+        reward_lfd = -0.2 * (lfd * self.curvature_proxy)**2
 
+        self.lfd_prev = lfd
+        self.v_prev   = target_speed
         # 보상 함수 설계
         reward_cte = self.w_cte * (cte ** 2)  # CTE에 대한 페널티
         reward_heading = self.w_heading * (heading_error ** 2)  # Heading
         reward_progress = self.w_progress * step_progress  # 진행에 대한 보상
 
-        vel_error = abs(target_speed - linear_vel_ms)
-        reward_vel = self.w_vel_error * (vel_error**2)  # 속도 오차에 대한 페널티
+        # vel_error = abs(target_speed - linear_vel_ms)
+        # reward_vel = self.w_vel_error * (vel_error**2)  # 속도 오차에 대한 페널티
 
         reward_steering = self.w_steering * (angular_vel_z**2) # linear_vel_ms   급격한 조향에 대한 페널티
         
@@ -696,8 +699,8 @@ class DrappEnv(gym.Env):
         })
         # ★★★★★ 각 보상 항목을 로그로 출력하여 스케일 확인 ★★★★★
         rospy.loginfo_throttle(0.05, 
-            f"Rewards -> CTE: {reward_cte:.2f}, Heading: {reward_heading:.2f}, Vel: {reward_vel:.2f}, "
-            f"Steering: {reward_steering:.2f}, Progress: {reward_progress:.2f},  blended_speed_reward: {blended_speed_reward:.2f},  Total: {reward:.2f}"
+            f"Rewards -> CTE: {reward_cte:.2f}, Heading: {reward_heading:.2f}, Vel error: {reward_error:.2f}, "
+            f"Steering: {reward_steering:.2f}, Progress: {reward_progress:.2f},  blended_speed_reward: {blended_speed_reward:.2f}, LFD: {reward_lfd}, Total: {reward:.2f}"
         )
         # 종료 조건: CTE가 너무 크면 종료
         terminated = False
