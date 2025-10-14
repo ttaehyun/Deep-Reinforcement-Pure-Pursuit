@@ -293,7 +293,7 @@ class DrappEnv(gym.Env):
                                        high=np.array([LFD_MAX, SPEED_MAX]).astype(np.float32))
 
         # --- ROS Node Initialization ---
-        rospy.init_node('drapp_env_node')
+        rospy.init_node('drapp_env_node', anonymous=True)
         # Publisher
         self.cmd_pub = rospy.Publisher('/fsds/control_command', ControlCommand, queue_size=1)
         self.odom_marker_pub = rospy.Publisher('/fsds/odom_marker', Marker, queue_size=1)
@@ -396,7 +396,7 @@ class DrappEnv(gym.Env):
             self.w_cte = -1.0
             self.w_heading = -1.0
             # self.w_vel_error = -0.1
-            self.w_vel = 0.3
+            self.w_vel = 0.5
             self.w_steering = -0.5
             self.w_progress = 10.0
             self.w_target = 10.0
@@ -637,8 +637,6 @@ class DrappEnv(gym.Env):
 
         # 하이퍼파라미터 설정
         TRANSITION_CURVATURE = 0.4 # ★★★ 새로운 곡률 지표에 맞게 기준점 상향 조정 (튜닝 필요)
-        # TRANSITION_CURVATURE = 0.070 # 튜닝 대상
-        TARGET_CORNER_SPEED = 7.0  # m/s
 
         # 1. 코너링 가중치 계산
         cornering_weight = min(1.0, self.curvature_proxy / TRANSITION_CURVATURE)
@@ -648,7 +646,7 @@ class DrappEnv(gym.Env):
         reward_straight = self.w_vel * linear_vel_ms
 
         # 곡률 기반 목표속도 v*(kappa)
-        k0, k1 = 9.0, 5.0          # 직선/코너 기준 속도(튜닝)
+        k0, k1 = 9.5, 5.0          # 직선/코너 기준 속도(튜닝)
         curvature = self.curvature_proxy
         v_target = np.clip(k0 - k1*curvature, 4.0, 10.0)
 
@@ -661,7 +659,7 @@ class DrappEnv(gym.Env):
         rospy.loginfo_throttle(0.05, "Cornering Weight: %.4f, Reward Straight: %.2f, Reward Corner Target: %.2f, Blended: %.2f" % (cornering_weight, reward_straight, reward_corner_target, blended_speed_reward))
         
         # 액션 변화율 벌점(너무 덜컥거리면)
-        reward_error = -0.2 * ( (lfd - self.lfd_prev)**2 + (target_speed - self.v_prev)**2 )
+        reward_error = -0.3 * ( (lfd - self.lfd_prev)**2 + (target_speed - self.v_prev)**2 )
         # 코너에서 LFD 과대 억제(언더스티어 방지)
         reward_lfd = -0.2 * (lfd * self.curvature_proxy)**2
 
