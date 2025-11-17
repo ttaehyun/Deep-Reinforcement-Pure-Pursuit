@@ -78,7 +78,7 @@ if __name__ == '__main__':
     
     # 파일 경로를 파라미터 서버에서 가져오거나 직접 지정
     # 'rosparam set path_file_path /경로/to/my_path.txt' 와 같이 설정 가능
-    file_path = '/home/avl/Deep-Reinforcement-Pure-Pursuit/src/control_ws/path/competition_map_testday2_centerline.txt'
+    file_path = '/home/avl/Downloads/Practice_path_planning_for_formula_student_driverless-main/csv/centerline.csv'
 
     rospy.loginfo("경로 파일 '%s'을(를) 읽습니다.", file_path)
     
